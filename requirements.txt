@@ -1,0 +1,59 @@
+# Deep Learning Framework
+torch>=2.0.0
+torchaudio>=2.0.0
+torchvision>=0.15.0
+
+# Audio Processing
+librosa>=0.10.0
+soundfile>=0.12.0
+scipy>=1.10.0
+resampy>=0.4.2
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+tensorboard>=2.13.0
+
+# Progress bars
+tqdm>=4.65.0
+
+# Configuration
+pyyaml>=6.0
+omegaconf>=2.3.0
+
+# Utilities
+scikit-learn>=1.2.0
+pillow>=9.5.0
+
+# Vocoder (HiFi-GAN)
+# Git repository: https://github.com/jik876/hifi-gan
+# Install separately if needed
+
+# For Streamlit demo
+streamlit>=1.24.0
+plotly>=5.14.0
+
+# Metrics
+pesq>=0.0.4
+pystoi>=0.3.3
+
+# Optional: for distributed training
+# accelerate>=0.20.0
+
+# Development tools
+pytest>=7.3.0
+black>=23.3.0
+flake8>=6.0.0
+isort>=5.12.0
+
+# Jupyter for notebooks
+jupyter>=1.0.0
+ipykernel>=6.23.0
+ipywidgets>=8.0.0
+
+# For model evaluation
+mir_eval>=0.7
