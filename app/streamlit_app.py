@@ -22,7 +22,7 @@ st.set_page_config(
 )
 
 # Title
-st.title("🎤 VoiceGAN: Voice Conversion System")
+st.title(" VoiceGAN: Voice Conversion System")
 st.markdown("Transform voice A into voice B while preserving content")
 
 # Sidebar for settings
