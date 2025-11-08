@@ -1,382 +1,181 @@
-"""
-Fonctions de perte pour VoiceGAN-Transformation
-"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import List, Tuple
 
-
-class ReconstructionLoss(nn.Module):
-    """
-    L1 Loss entre spectrogramme généré et spectrogramme réel
-    Assure que le spectrogramme généré ressemble à celui de B
-    """
-
-    def __init__(self, loss_type='l1'):
-        super().__init__()
-        self.loss_type = loss_type
-
-        if loss_type == 'l1':
-            self.criterion = nn.L1Loss()
-        elif loss_type == 'l2':
-            self.criterion = nn.MSELoss()
-        elif loss_type == 'smooth_l1':
-            self.criterion = nn.SmoothL1Loss()
-        else:
-            raise ValueError(f"Unknown loss type: {loss_type}")
-
-    def forward(self, generated_mel, target_mel):
-        """
-        Args:
-            generated_mel: (batch, n_mels, time) - Spectrogramme généré
-            target_mel: (batch, n_mels, time) - Spectrogramme cible (B)
-
-        Returns:
-            loss: Scalaire
-        """
-        return self.criterion(generated_mel, target_mel)
-
-
-class AdversarialLoss(nn.Module):
-    """
-    Perte adversariale pour le GAN
-    Supporte plusieurs types de GAN loss
-    """
-
-    def __init__(self, gan_mode='lsgan'):
-        super().__init__()
-        self.gan_mode = gan_mode
-
-        if gan_mode == 'vanilla':
-            self.criterion = nn.BCEWithLogitsLoss()
-        elif gan_mode == 'lsgan':
-            self.criterion = nn.MSELoss()
-        elif gan_mode == 'wgan':
-            self.criterion = None  # Wasserstein distance
-        elif gan_mode == 'hinge':
-            self.criterion = None  # Hinge loss
-        else:
-            raise ValueError(f"Unknown GAN mode: {gan_mode}")
-
-    def forward(self, prediction, target_is_real):
-        """
-        Args:
-            prediction: Sortie du discriminateur
-            target_is_real: bool - True si on veut que ce soit réel
-
-        Returns:
-            loss: Scalaire
-        """
-        if self.gan_mode == 'vanilla' or self.gan_mode == 'lsgan':
-            if target_is_real:
-                target = torch.ones_like(prediction)
-            else:
-                target = torch.zeros_like(prediction)
-            loss = self.criterion(prediction, target)
-
-        elif self.gan_mode == 'wgan':
-            if target_is_real:
-                loss = -prediction.mean()
-            else:
-                loss = prediction.mean()
-
-        elif self.gan_mode == 'hinge':
-            if target_is_real:
-                loss = F.relu(1.0 - prediction).mean()
-            else:
-                loss = F.relu(1.0 + prediction).mean()
-
-        return loss
-
-
-class IdentityLoss(nn.Module):
-    """
-    Perte d'identité vocale
-    Garantit que la sortie ressemble bien à la voix de B
-    Utilise un encodeur pré-entraîné pour extraire les embeddings
-    """
-
-    def __init__(self, embedding_model=None):
-        super().__init__()
-        self.embedding_model = embedding_model
-        self.cosine_sim = nn.CosineSimilarity(dim=1)
-
-    def forward(self, generated_mel, target_mel, style_encoder=None):
-        """
-        Args:
-            generated_mel: (batch, n_mels, time) - Spectrogramme généré
-            target_mel: (batch, n_mels, time) - Spectrogramme de référence (B)
-            style_encoder: Encodeur de style pour extraire les embeddings
-
-        Returns:
-            loss: Scalaire (1 - similarité cosinus)
-        """
-        if style_encoder is not None:
-            # Extraire les embeddings de style
-            with torch.no_grad():
-                target_style = style_encoder(target_mel)
-            generated_style = style_encoder(generated_mel)
-
-            # Similarité cosinus (maximiser)
-            similarity = self.cosine_sim(generated_style, target_style)
-            loss = 1.0 - similarity.mean()
-        else:
-            # Simple L2 loss si pas d'encodeur disponible
-            loss = F.mse_loss(generated_mel, target_mel)
-
-        return loss
-
-
-class ContentLoss(nn.Module):
-    """
-    Perte de contenu
-    Garantit que le texte prononcé reste celui de A
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.criterion = nn.L1Loss()
-
-    def forward(self, source_content, generated_content):
-        """
-        Args:
-            source_content: (batch, time, content_dim) - Contenu de A (source)
-            generated_content: (batch, time, content_dim) - Contenu du généré
-
-        Returns:
-            loss: Scalaire
-        """
-        return self.criterion(generated_content, source_content)
-
-
-class PerceptualLoss(nn.Module):
-    """
-    Perte perceptuelle
-    Compare les features à différentes couches d'un réseau
-    """
-
-    def __init__(self, feature_network=None):
-        super().__init__()
-        self.feature_network = feature_network
-        self.criterion = nn.L1Loss()
-
-    def forward(self, generated_mel, target_mel):
-        """
-        Args:
-            generated_mel: (batch, n_mels, time)
-            target_mel: (batch, n_mels, time)
-
-        Returns:
-            loss: Scalaire
-        """
-        if self.feature_network is None:
-            # Fallback à simple reconstruction loss
-            return self.criterion(generated_mel, target_mel)
-
-        # Extraire les features
-        gen_features = self.feature_network(generated_mel)
-        target_features = self.feature_network(target_mel)
-
-        # Comparer les features
-        if isinstance(gen_features, list):
-            loss = 0
-            for gen_f, target_f in zip(gen_features, target_features):
-                loss += self.criterion(gen_f, target_f)
-            loss /= len(gen_features)
-        else:
-            loss = self.criterion(gen_features, target_features)
-
-        return loss
-
-
-class FeatureMatchingLoss(nn.Module):
-    """
-    Feature Matching Loss
-    Améliore la stabilité du GAN en matchant les features intermédiaires
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.criterion = nn.L1Loss()
-
-    def forward(self, real_features, fake_features):
-        """
-        Args:
-            real_features: Liste de features du discriminateur pour données réelles
-            fake_features: Liste de features du discriminateur pour données générées
-
-        Returns:
-            loss: Scalaire
-        """
-        loss = 0
-        for real_f, fake_f in zip(real_features, fake_features):
-            loss += self.criterion(fake_f, real_f.detach())
-
-        return loss / len(real_features)
-
-
-class TotalLoss(nn.Module):
-    """
-    Perte totale combinant toutes les pertes
-    """
-
-    def __init__(self,
-                 lambda_recon=10.0,
-                 lambda_identity=5.0,
-                 lambda_content=2.0,
-                 lambda_adv=1.0,
-                 lambda_perceptual=1.0,
-                 lambda_feature_matching=1.0):
-        super().__init__()
-
-        self.lambda_recon = lambda_recon
+class VoiceGANLoss:
+    """Combined loss for VoiceGAN training"""
+    
+    def __init__(
+        self,
+        lambda_reconstruction: float = 10.0,
+        lambda_adversarial: float = 1.0,
+        lambda_identity: float = 5.0,
+        lambda_content: float = 1.0,
+        lambda_feature_matching: float = 10.0
+    ):
+        self.lambda_reconstruction = lambda_reconstruction
+        self.lambda_adversarial = lambda_adversarial
         self.lambda_identity = lambda_identity
         self.lambda_content = lambda_content
-        self.lambda_adv = lambda_adv
-        self.lambda_perceptual = lambda_perceptual
         self.lambda_feature_matching = lambda_feature_matching
-
-        # Initialiser les pertes
-        self.recon_loss = ReconstructionLoss(loss_type='l1')
-        self.adv_loss = AdversarialLoss(gan_mode='lsgan')
+        
+        self.reconstruction_loss = ReconstructionLoss()
+        self.adversarial_loss = AdversarialLoss()
         self.identity_loss = IdentityLoss()
         self.content_loss = ContentLoss()
-        self.perceptual_loss = PerceptualLoss()
         self.feature_matching_loss = FeatureMatchingLoss()
-
-    def generator_loss(self,
-                       generated_mel,
-                       target_mel,
-                       source_content,
-                       generated_content,
-                       disc_fake_output,
-                       style_encoder=None,
-                       real_features=None,
-                       fake_features=None):
+    
+    def generator_loss(
+        self,
+        real_mel: torch.Tensor,
+        fake_mel: torch.Tensor,
+        disc_fake_outputs: List[torch.Tensor],
+        disc_fake_features: List[List[torch.Tensor]],
+        disc_real_features: List[List[torch.Tensor]],
+        content_source: torch.Tensor,
+        content_fake: torch.Tensor,
+        style_target: torch.Tensor,
+        style_fake: torch.Tensor
+    ) -> Tuple[torch.Tensor, dict]:
         """
-        Calcule la perte totale du générateur
-
+        Compute generator losses
+        
         Returns:
-            total_loss, dict of individual losses
+            total_loss: Combined loss
+            loss_dict: Dictionary of individual losses
         """
-        losses = {}
-
-        # Reconstruction loss
-        losses['recon'] = self.recon_loss(generated_mel, target_mel)
-
-        # Adversarial loss (générateur veut tromper le discriminateur)
-        losses['adv'] = self.adv_loss(disc_fake_output, target_is_real=True)
-
-        # Identity loss
-        losses['identity'] = self.identity_loss(generated_mel, target_mel, style_encoder)
-
-        # Content loss
-        losses['content'] = self.content_loss(source_content, generated_content)
-
-        # Perceptual loss (optionnel)
-        if self.lambda_perceptual > 0:
-            losses['perceptual'] = self.perceptual_loss(generated_mel, target_mel)
-
-        # Feature matching loss (optionnel)
-        if self.lambda_feature_matching > 0 and real_features is not None:
-            losses['feature_matching'] = self.feature_matching_loss(real_features, fake_features)
-
+        # Reconstruction loss (L1)
+        loss_recon = self.reconstruction_loss(fake_mel, real_mel)
+        
+        # Adversarial loss
+        loss_adv = self.adversarial_loss.generator_loss(disc_fake_outputs)
+        
+        # Identity loss (style should match target)
+        loss_identity = self.identity_loss(style_fake, style_target)
+        
+        # Content preservation loss
+        loss_content = self.content_loss(content_fake, content_source)
+        
+        # Feature matching loss
+        loss_fm = self.feature_matching_loss(disc_fake_features, disc_real_features)
+        
         # Total loss
         total_loss = (
-                self.lambda_recon * losses['recon'] +
-                self.lambda_adv * losses['adv'] +
-                self.lambda_identity * losses['identity'] +
-                self.lambda_content * losses['content']
+            self.lambda_reconstruction * loss_recon +
+            self.lambda_adversarial * loss_adv +
+            self.lambda_identity * loss_identity +
+            self.lambda_content * loss_content +
+            self.lambda_feature_matching * loss_fm
         )
-
-        if 'perceptual' in losses:
-            total_loss += self.lambda_perceptual * losses['perceptual']
-
-        if 'feature_matching' in losses:
-            total_loss += self.lambda_feature_matching * losses['feature_matching']
-
-        losses['total'] = total_loss
-
-        return total_loss, losses
-
-    def discriminator_loss(self, disc_real_output, disc_fake_output):
-        """
-        Calcule la perte du discriminateur
-
-        Returns:
-            total_loss, dict of individual losses
-        """
-        # Real loss
-        loss_real = self.adv_loss(disc_real_output, target_is_real=True)
-
-        # Fake loss
-        loss_fake = self.adv_loss(disc_fake_output, target_is_real=False)
-
-        # Total discriminator loss
-        total_loss = (loss_real + loss_fake) * 0.5
-
-        losses = {
-            'real': loss_real,
-            'fake': loss_fake,
-            'total': total_loss
+        
+        loss_dict = {
+            'g_total': total_loss.item(),
+            'g_recon': loss_recon.item(),
+            'g_adv': loss_adv.item(),
+            'g_identity': loss_identity.item(),
+            'g_content': loss_content.item(),
+            'g_fm': loss_fm.item()
         }
+        
+        return total_loss, loss_dict
+    
+    def discriminator_loss(
+        self,
+        disc_real_outputs: List[torch.Tensor],
+        disc_fake_outputs: List[torch.Tensor]
+    ) -> Tuple[torch.Tensor, dict]:
+        """
+        Compute discriminator loss
+        
+        Returns:
+            total_loss: Discriminator loss
+            loss_dict: Dictionary of losses
+        """
+        loss_real = self.adversarial_loss.discriminator_loss_real(disc_real_outputs)
+        loss_fake = self.adversarial_loss.discriminator_loss_fake(disc_fake_outputs)
+        
+        total_loss = loss_real + loss_fake
+        
+        loss_dict = {
+            'd_total': total_loss.item(),
+            'd_real': loss_real.item(),
+            'd_fake': loss_fake.item()
+        }
+        
+        return total_loss, loss_dict
 
-        return total_loss, losses
+class ReconstructionLoss(nn.Module):
+    """L1 reconstruction loss between generated and real mel-spectrograms"""
+    
+    def __init__(self):
+        super().__init__()
+        self.l1_loss = nn.L1Loss()
+    
+    def forward(self, fake: torch.Tensor, real: torch.Tensor) -> torch.Tensor:
+        return self.l1_loss(fake, real)
 
+class AdversarialLoss(nn.Module):
+    """GAN adversarial loss (LSGAN)"""
+    
+    def __init__(self):
+        super().__init__()
+        self.mse_loss = nn.MSELoss()
+    
+    def generator_loss(self, disc_fake_outputs: List[torch.Tensor]) -> torch.Tensor:
+        """Generator tries to fool discriminator"""
+        loss = 0
+        for fake_out in disc_fake_outputs:
+            loss += self.mse_loss(fake_out, torch.ones_like(fake_out))
+        return loss / len(disc_fake_outputs)
+    
+    def discriminator_loss_real(self, disc_real_outputs: List[torch.Tensor]) -> torch.Tensor:
+        """Discriminator should classify real as 1"""
+        loss = 0
+        for real_out in disc_real_outputs:
+            loss += self.mse_loss(real_out, torch.ones_like(real_out))
+        return loss / len(disc_real_outputs)
+    
+    def discriminator_loss_fake(self, disc_fake_outputs: List[torch.Tensor]) -> torch.Tensor:
+        """Discriminator should classify fake as 0"""
+        loss = 0
+        for fake_out in disc_fake_outputs:
+            loss += self.mse_loss(fake_out, torch.zeros_like(fake_out))
+        return loss / len(disc_fake_outputs)
 
-if __name__ == "__main__":
-    # Test des losses
-    print("Testing Loss Functions")
-    print("=" * 60)
+class IdentityLoss(nn.Module):
+    """Ensures generated style matches target style"""
+    
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, style_fake: torch.Tensor, style_target: torch.Tensor) -> torch.Tensor:
+        return F.l1_loss(style_fake, style_target)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 4
-    n_mels = 80
-    time_steps = 200
-    content_dim = 256
+class ContentLoss(nn.Module):
+    """Ensures content is preserved from source"""
+    
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, content_fake: torch.Tensor, content_source: torch.Tensor) -> torch.Tensor:
+        return F.l1_loss(content_fake, content_source)
 
-    # Créer des tenseurs de test
-    generated_mel = torch.randn(batch_size, n_mels, time_steps).to(device)
-    target_mel = torch.randn(batch_size, n_mels, time_steps).to(device)
-    source_content = torch.randn(batch_size, time_steps, content_dim).to(device)
-    generated_content = torch.randn(batch_size, time_steps, content_dim).to(device)
-    disc_output = torch.randn(batch_size, 1, 50).to(device)
-
-    # Test des pertes individuelles
-    recon_loss = ReconstructionLoss()
-    print(f"Reconstruction Loss: {recon_loss(generated_mel, target_mel).item():.4f}")
-
-    adv_loss = AdversarialLoss()
-    print(f"Adversarial Loss (real): {adv_loss(disc_output, True).item():.4f}")
-    print(f"Adversarial Loss (fake): {adv_loss(disc_output, False).item():.4f}")
-
-    identity_loss = IdentityLoss()
-    print(f"Identity Loss: {identity_loss(generated_mel, target_mel).item():.4f}")
-
-    content_loss = ContentLoss()
-    print(f"Content Loss: {content_loss(source_content, generated_content).item():.4f}")
-
-    # Test perte totale
-    print("\n" + "=" * 60)
-    total_loss = TotalLoss()
-
-    disc_fake = torch.randn(batch_size, 1, 50).to(device)
-    disc_real = torch.randn(batch_size, 1, 50).to(device)
-
-    g_loss, g_losses = total_loss.generator_loss(
-        generated_mel, target_mel, source_content, generated_content, disc_fake
-    )
-
-    print("\nGenerator Losses:")
-    for name, value in g_losses.items():
-        print(f"  {name}: {value.item():.4f}")
-
-    d_loss, d_losses = total_loss.discriminator_loss(disc_real, disc_fake)
-
-    print("\nDiscriminator Losses:")
-    for name, value in d_losses.items():
-        print(f"  {name}: {value.item():.4f}")
-
-    print("\n" + "=" * 60)
-    print("✓ All loss tests passed!")
-    print("=" * 60)
+class FeatureMatchingLoss(nn.Module):
+    """Feature matching loss for more stable training"""
+    
+    def __init__(self):
+        super().__init__()
+    
+    def forward(
+        self,
+        fake_features: List[List[torch.Tensor]],
+        real_features: List[List[torch.Tensor]]
+    ) -> torch.Tensor:
+        loss = 0
+        for fake_feats, real_feats in zip(fake_features, real_features):
+            for fake_feat, real_feat in zip(fake_feats, real_feats):
+                loss += F.l1_loss(fake_feat, real_feat.detach())
+        
+        num_features = sum(len(feats) for feats in fake_features)
+        return loss / num_features

@@ -1,327 +1,181 @@
-"""
-Prétraitement audio et génération de melspectrogrammes
-"""
 import torch
 import torchaudio
 import librosa
 import numpy as np
 from pathlib import Path
-
+from typing import Optional, Tuple, Union
 
 class AudioProcessor:
-    """
-    Classe pour le prétraitement audio
-    - Chargement des fichiers audio
-    - Normalisation
-    - Suppression du silence
-    - Génération de melspectrogrammes
-    """
-
-    def __init__(self, config):
-        self.config = config
-        self.sample_rate = config.SAMPLE_RATE
-        self.n_fft = config.N_FFT
-        self.hop_length = config.HOP_LENGTH
-        self.win_length = config.WIN_LENGTH
-        self.n_mels = config.N_MELS
-        self.mel_fmin = config.MEL_FMIN
-        self.mel_fmax = config.MEL_FMAX
-
-        # Mel filterbank
-        self.mel_basis = librosa.filters.mel(
-            sr=self.sample_rate,
-            n_fft=self.n_fft,
-            n_mels=self.n_mels,
-            fmin=self.mel_fmin,
-            fmax=self.mel_fmax
-        )
-
-    def load_audio(self, audio_path, normalize=True, trim_silence=True):
+    """Audio loading, processing and saving utilities"""
+    
+    def __init__(
+        self,
+        sample_rate: int = 22050,
+        segment_length: int = 16384,
+        normalize: bool = True
+    ):
+        self.sample_rate = sample_rate
+        self.segment_length = segment_length
+        self.normalize = normalize
+    
+    def load_audio(
+        self, 
+        path: Union[str, Path],
+        offset: float = 0.0,
+        duration: Optional[float] = None
+    ) -> torch.Tensor:
         """
-        Charge un fichier audio
-
+        Load audio file
         Args:
-            audio_path: Chemin vers le fichier audio
-            normalize: Normaliser l'amplitude
-            trim_silence: Supprimer les silences au début/fin
-
+            path: Path to audio file
+            offset: Start reading after this time (in seconds)
+            duration: Only load up to this much audio (in seconds)
         Returns:
-            audio: np.array (samples,)
-            sr: Sample rate
+            audio: (samples,) torch tensor
         """
-        # Charger l'audio
-        audio, sr = librosa.load(audio_path, sr=self.sample_rate)
-
-        # Trim silence
-        if trim_silence:
-            audio, _ = librosa.effects.trim(
-                audio,
-                top_db=20,
-                frame_length=self.win_length,
-                hop_length=self.hop_length
-            )
-
-        # Normalisation
-        if normalize:
-            audio = audio / (np.max(np.abs(audio)) + 1e-8)
-            audio = audio * 0.95  # Éviter le clipping
-
-        return audio, sr
-
-    def audio_to_mel(self, audio):
-        """
-        Convertit un signal audio en melspectrogram
-
-        Args:
-            audio: np.array (samples,)
-
-        Returns:
-            mel: np.array (n_mels, time)
-        """
-        # STFT
-        D = librosa.stft(
-            audio,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            win_length=self.win_length,
-            window='hann',
-            center=True,
-            pad_mode='reflect'
-        )
-
-        # Magnitude
-        S = np.abs(D)
-
-        # Mel scale
-        mel = np.dot(self.mel_basis, S)
-
-        # Log scale
-        mel = np.log(np.maximum(mel, 1e-5))
-
-        return mel
-
-    def mel_to_audio(self, mel, vocoder=None):
-        """
-        Convertit un melspectrogram en audio (nécessite un vocoder)
-
-        Args:
-            mel: np.array (n_mels, time) ou torch.Tensor
-            vocoder: Modèle vocoder (HiFi-GAN, MelGAN, etc.)
-
-        Returns:
-            audio: np.array (samples,)
-        """
-        if vocoder is None:
-            # Utiliser Griffin-Lim si pas de vocoder
-            # Inverse mel scale
-            mel_exp = np.exp(mel)
-            S = np.dot(self.mel_basis.T, mel_exp)
-
-            # Griffin-Lim
-            audio = librosa.griffinlim(
-                S,
-                n_iter=32,
-                hop_length=self.hop_length,
-                win_length=self.win_length
-            )
-        else:
-            # Utiliser le vocoder neural
-            if isinstance(mel, np.ndarray):
-                mel = torch.from_numpy(mel).float()
-
-            with torch.no_grad():
-                audio = vocoder(mel.unsqueeze(0))
-                audio = audio.squeeze().cpu().numpy()
-
+        audio, sr = torchaudio.load(str(path))
+        
+        # Convert to mono if stereo
+        if audio.shape[0] > 1:
+            audio = audio.mean(dim=0, keepdim=True)
+        
+        audio = audio.squeeze(0)
+        
+        # Resample if necessary
+        if sr != self.sample_rate:
+            resampler = torchaudio.transforms.Resample(sr, self.sample_rate)
+            audio = resampler(audio)
+        
+        # Apply offset and duration
+        if offset > 0 or duration is not None:
+            start_sample = int(offset * self.sample_rate)
+            end_sample = int((offset + duration) * self.sample_rate) if duration else len(audio)
+            audio = audio[start_sample:end_sample]
+        
+        # Normalize
+        if self.normalize:
+            audio = self._normalize_audio(audio)
+        
         return audio
-
-    def normalize_mel(self, mel, method='instance'):
+    
+    def save_audio(
+        self,
+        audio: torch.Tensor,
+        path: Union[str, Path],
+        sample_rate: Optional[int] = None
+    ):
+        """Save audio to file"""
+        if sample_rate is None:
+            sample_rate = self.sample_rate
+        
+        # Ensure audio is in correct shape
+        if audio.dim() == 1:
+            audio = audio.unsqueeze(0)
+        
+        # Denormalize if needed
+        audio = torch.clamp(audio, -1.0, 1.0)
+        
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        torchaudio.save(str(path), audio, sample_rate)
+    
+    def segment_audio(
+        self,
+        audio: torch.Tensor,
+        segment_length: Optional[int] = None,
+        random: bool = True
+    ) -> torch.Tensor:
         """
-        Normalise le melspectrogram
-
+        Extract segment from audio
         Args:
-            mel: np.array (n_mels, time)
-            method: 'instance', 'global', 'none'
-
+            audio: (samples,)
+            segment_length: Length of segment to extract
+            random: If True, extract random segment; otherwise from start
         Returns:
-            mel_norm: np.array (n_mels, time)
+            segment: (segment_length,)
         """
-        if method == 'instance':
-            # Instance normalization
-            mean = np.mean(mel)
-            std = np.std(mel)
-            mel_norm = (mel - mean) / (std + 1e-8)
-
-        elif method == 'global':
-            # Global normalization (basé sur des stats du dataset)
-            # Ces valeurs devraient être calculées sur le dataset
-            mean = -5.0
-            std = 2.0
-            mel_norm = (mel - mean) / (std + 1e-8)
-
-        else:
-            mel_norm = mel
-
-        return mel_norm
-
-    def denormalize_mel(self, mel_norm, method='instance', stats=None):
-        """
-        Dénormalise le melspectrogram
-
-        Args:
-            mel_norm: np.array (n_mels, time)
-            method: 'instance', 'global', 'none'
-            stats: dict avec 'mean' et 'std' si nécessaire
-
-        Returns:
-            mel: np.array (n_mels, time)
-        """
-        if method == 'instance' and stats is not None:
-            mel = mel_norm * stats['std'] + stats['mean']
-        elif method == 'global':
-            mean = -5.0
-            std = 2.0
-            mel = mel_norm * std + mean
-        else:
-            mel = mel_norm
-
-        return mel
-
-    def process_audio_file(self, audio_path, output_path=None):
-        """
-        Pipeline complet: audio → melspectrogram → sauvegarde
-
-        Args:
-            audio_path: Chemin vers le fichier audio
-            output_path: Chemin de sortie (optionnel)
-
-        Returns:
-            mel: np.array (n_mels, time)
-        """
-        # Charger l'audio
-        audio, sr = self.load_audio(audio_path)
-
-        # Générer le melspectrogram
-        mel = self.audio_to_mel(audio)
-
-        # Normaliser
-        mel = self.normalize_mel(mel, method='instance')
-
-        # Sauvegarder si demandé
-        if output_path is not None:
-            np.save(output_path, mel)
-
-        return mel
-
-    def batch_process_directory(self, input_dir, output_dir):
-        """
-        Traite tous les fichiers audio d'un répertoire
-
-        Args:
-            input_dir: Répertoire contenant les fichiers audio
-            output_dir: Répertoire de sortie pour les melspectrograms
-        """
-        input_dir = Path(input_dir)
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Extensions audio supportées
-        audio_extensions = ['.wav', '.flac', '.mp3', '.m4a']
-
-        # Trouver tous les fichiers audio
-        audio_files = []
-        for ext in audio_extensions:
-            audio_files.extend(input_dir.rglob(f'*{ext}'))
-
-        print(f"Found {len(audio_files)} audio files")
-
-        # Traiter chaque fichier
-        for i, audio_path in enumerate(audio_files):
-            try:
-                # Chemin de sortie
-                rel_path = audio_path.relative_to(input_dir)
-                output_path = output_dir / rel_path.with_suffix('.npy')
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Traiter
-                self.process_audio_file(audio_path, output_path)
-
-                if (i + 1) % 100 == 0:
-                    print(f"Processed {i + 1}/{len(audio_files)} files")
-
-            except Exception as e:
-                print(f"Error processing {audio_path}: {e}")
-
-        print(f"Preprocessing complete! Saved to {output_dir}")
-
-
-def compute_dataset_statistics(mel_dir, output_path='dataset_stats.npy'):
-    """
-    Calcule les statistiques (mean, std) sur tout le dataset
-    Pour la normalisation globale
-
-    Args:
-        mel_dir: Répertoire contenant les melspectrograms .npy
-        output_path: Chemin de sortie pour les stats
-    """
-    mel_dir = Path(mel_dir)
-    mel_files = list(mel_dir.rglob('*.npy'))
-
-    print(f"Computing statistics on {len(mel_files)} files...")
-
-    all_values = []
-
-    for i, mel_path in enumerate(mel_files):
-        try:
-            mel = np.load(mel_path)
-            all_values.append(mel.flatten())
-
-            if (i + 1) % 1000 == 0:
-                print(f"Processed {i + 1}/{len(mel_files)} files")
-        except Exception as e:
-            print(f"Error loading {mel_path}: {e}")
-
-    # Concaténer toutes les valeurs
-    all_values = np.concatenate(all_values)
-
-    # Calculer les statistiques
-    mean = np.mean(all_values)
-    std = np.std(all_values)
-
-    stats = {
-        'mean': mean,
-        'std': std,
-        'min': np.min(all_values),
-        'max': np.max(all_values)
-    }
-
-    # Sauvegarder
-    np.save(output_path, stats)
-
-    print(f"\nDataset Statistics:")
-    print(f"  Mean: {mean:.4f}")
-    print(f"  Std: {std:.4f}")
-    print(f"  Min: {stats['min']:.4f}")
-    print(f"  Max: {stats['max']:.4f}")
-    print(f"Saved to {output_path}")
-
-    return stats
-
-
-if __name__ == "__main__":
-    from config.model_config import ModelConfig
-
-    # Test de l'AudioProcessor
-    processor = AudioProcessor(ModelConfig)
-
-    print("AudioProcessor initialized")
-    print(f"Sample rate: {processor.sample_rate}")
-    print(f"N_mels: {processor.n_mels}")
-    print(f"Hop length: {processor.hop_length}")
-
-    # Pour tester avec un fichier réel, décommenter:
-    # audio_path = "path/to/audio.wav"
-    # mel = processor.process_audio_file(audio_path)
-    # print(f"Melspectrogram shape: {mel.shape}")
-
-    print("\n✓ AudioProcessor test passed!")
+        if segment_length is None:
+            segment_length = self.segment_length
+        
+        if len(audio) < segment_length:
+            # Pad if audio is too short
+            padding = segment_length - len(audio)
+            audio = torch.nn.functional.pad(audio, (0, padding))
+        elif len(audio) > segment_length:
+            # Extract segment
+            if random:
+                max_start = len(audio) - segment_length
+                start = torch.randint(0, max_start + 1, (1,)).item()
+            else:
+                start = 0
+            audio = audio[start:start + segment_length]
+        
+        return audio
+    
+    def trim_silence(
+        self,
+        audio: torch.Tensor,
+        top_db: float = 30.0,
+        frame_length: int = 2048,
+        hop_length: int = 512
+    ) -> torch.Tensor:
+        """Remove leading and trailing silence"""
+        audio_np = audio.numpy()
+        non_silent_intervals = librosa.effects.split(
+            audio_np,
+            top_db=top_db,
+            frame_length=frame_length,
+            hop_length=hop_length
+        )
+        
+        if len(non_silent_intervals) == 0:
+            return audio
+        
+        start = non_silent_intervals[0][0]
+        end = non_silent_intervals[-1][1]
+        
+        return audio[start:end]
+    
+    def apply_preemphasis(
+        self,
+        audio: torch.Tensor,
+        coef: float = 0.97
+    ) -> torch.Tensor:
+        """Apply pre-emphasis filter"""
+        return torch.cat([
+            audio[:1],
+            audio[1:] - coef * audio[:-1]
+        ])
+    
+    def remove_preemphasis(
+        self,
+        audio: torch.Tensor,
+        coef: float = 0.97
+    ) -> torch.Tensor:
+        """Remove pre-emphasis filter"""
+        result = torch.zeros_like(audio)
+        result[0] = audio[0]
+        for i in range(1, len(audio)):
+            result[i] = audio[i] + coef * result[i-1]
+        return result
+    
+    def _normalize_audio(self, audio: torch.Tensor) -> torch.Tensor:
+        """Normalize audio to [-1, 1]"""
+        max_val = audio.abs().max()
+        if max_val > 0:
+            audio = audio / max_val
+        return audio
+    
+    def compute_rms(self, audio: torch.Tensor) -> float:
+        """Compute RMS energy"""
+        return torch.sqrt(torch.mean(audio ** 2)).item()
+    
+    def adjust_volume(
+        self,
+        audio: torch.Tensor,
+        target_rms: float
+    ) -> torch.Tensor:
+        """Adjust audio volume to target RMS"""
+        current_rms = self.compute_rms(audio)
+        if current_rms > 0:
+            audio = audio * (target_rms / current_rms)
+        return audio
