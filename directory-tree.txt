@@ -1,0 +1,70 @@
+VoiceGan_Project/
+├── app/
+│   ├── assets/
+│   ├── streamlit_app.py
+│   └── utils.py
+├── checkpoints/
+├── config/
+│   ├── __init__.py
+│   ├── config.yaml
+│   └── model_config.py
+├── docs/
+│   └── Mini Projet ML 2025.pdf
+├── logs/
+├── notebooks/
+│   ├── 01_data_exploration.ipynb
+│   ├── 02_preprocessing.ipynb
+│   ├── 03_model_training.ipynb
+│   └── 04_evaluation.ipynb
+├── outputs/
+│   ├── audio/
+│   ├── spectrograms/
+├── scripts/
+│   ├── convert.py
+│   ├── evaluate.py
+│   ├── prepare.py
+│   ├── prepare_data.py
+│   └── train.py
+├── src/
+│   ├── evaluation/
+│   │   ├── __init__.py
+│   │   ├── metrics.py
+│   │   └── mos_evaluation.py
+│   ├── inference/
+│   │   ├── __init__.py
+│   │   ├── converter.py
+│   │   └── utils.py
+│   ├── losses/
+│   │   ├── __init__.py
+│   │   ├── adversarial_loss.py
+│   │   ├── content_loss.py
+│   │   ├── identity_loss.py
+│   │   ├── losses.py
+│   │   └── reconstruction_loss.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── content_encoder.py
+│   │   ├── discriminator.py
+│   │   ├── generator.py
+│   │   ├── style_encoder.py
+│   │   ├── vocoder.py
+│   │   └── voicegan.py
+│   ├── preprocessing/
+│   │   ├── __init__.py
+│   │   ├── audio_processor.py
+│   │   ├── data_augmentation.py
+│   │   └── mel_spectrogram.py
+│   ├── training/
+│   │   ├── __init__.py
+│   │   ├── dataset.py
+│   │   ├── trainer.py
+│   │   └── utils.py
+│   └── __init__.py
+├── tests/
+│   ├── __init__.py
+│   ├── test_losses.py
+│   ├── test_models.py
+│   └── test_preprocessing.py
+├── README.md
+├── requirements.txt
+└── setup.py
