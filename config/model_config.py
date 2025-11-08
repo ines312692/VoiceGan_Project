@@ -1,146 +1,119 @@
-"""
-Configuration du modèle VoiceGAN-Transformation
-"""
-import torch
+import yaml
+from pathlib import Path
+from dataclasses import dataclass
+from typing import List, Optional
 
+@dataclass
+class AudioConfig:
+    sample_rate: int = 22050
+    n_fft: int = 1024
+    hop_length: int = 256
+    win_length: int = 1024
+    n_mels: int = 80
+    fmin: int = 0
+    fmax: int = 8000
+    segment_length: int = 16384
 
-class ModelConfig:
-    """Configuration pour le modèle VoiceGAN"""
+@dataclass
+class ContentEncoderConfig:
+    channels: List[int] = None
+    kernel_sizes: List[int] = None
+    strides: List[int] = None
+    transformer_dim: int = 512
+    num_heads: int = 8
+    num_layers: int = 4
+    dropout: float = 0.1
+    
+    def __post_init__(self):
+        if self.channels is None:
+            self.channels = [64, 128, 256, 512]
+        if self.kernel_sizes is None:
+            self.kernel_sizes = [3, 3, 3, 3]
+        if self.strides is None:
+            self.strides = [1, 2, 2, 1]
 
-    # Audio parameters
-    SAMPLE_RATE = 22050
-    N_FFT = 1024
-    HOP_LENGTH = 256
-    WIN_LENGTH = 1024
-    N_MELS = 80
-    MEL_FMIN = 0
-    MEL_FMAX = 8000
+@dataclass
+class StyleEncoderConfig:
+    channels: List[int] = None
+    kernel_sizes: List[int] = None
+    strides: List[int] = None
+    style_dim: int = 256
+    
+    def __post_init__(self):
+        if self.channels is None:
+            self.channels = [64, 128, 256, 512]
+        if self.kernel_sizes is None:
+            self.kernel_sizes = [3, 3, 3, 3]
+        if self.strides is None:
+            self.strides = [2, 2, 2, 2]
 
-    # Model dimensions
-    CONTENT_DIM = 256
-    STYLE_DIM = 128
-    HIDDEN_DIM = 512
+@dataclass
+class GeneratorConfig:
+    input_dim: int = 768
+    channels: List[int] = None
+    kernel_sizes: List[int] = None
+    upsample_rates: List[int] = None
+    output_channels: int = 80
+    
+    def __post_init__(self):
+        if self.channels is None:
+            self.channels = [512, 256, 128, 64]
+        if self.kernel_sizes is None:
+            self.kernel_sizes = [3, 3, 3, 3]
+        if self.upsample_rates is None:
+            self.upsample_rates = [2, 2, 2, 1]
 
-    # Content Encoder (CNN + Transformer)
-    CONTENT_CNN_CHANNELS = [80, 128, 256]
-    CONTENT_TRANSFORMER_LAYERS = 4
-    CONTENT_TRANSFORMER_HEADS = 8
-    CONTENT_DROPOUT = 0.1
+@dataclass
+class DiscriminatorConfig:
+    channels: List[int] = None
+    kernel_sizes: List[int] = None
+    strides: List[int] = None
+    
+    def __post_init__(self):
+        if self.channels is None:
+            self.channels = [64, 128, 256, 512, 1024]
+        if self.kernel_sizes is None:
+            self.kernel_sizes = [4, 4, 4, 4, 4]
+        if self.strides is None:
+            self.strides = [2, 2, 2, 2, 1]
 
-    # Style Encoder (CNN)
-    STYLE_CNN_CHANNELS = [80, 128, 256, 512]
-    STYLE_KERNEL_SIZE = 5
-    STYLE_POOLING = "adaptive"
-
-    # Generator
-    GENERATOR_CHANNELS = [512, 256, 128, 80]
-    GENERATOR_KERNEL_SIZE = 5
-    GENERATOR_UPSAMPLE_RATES = [2, 2, 2, 2]
-
-    # Discriminator
-    DISC_CHANNELS = [80, 128, 256, 512, 1]
-    DISC_KERNEL_SIZE = 4
-    DISC_STRIDE = 2
-
-    # Training parameters
-    BATCH_SIZE = 16
-    NUM_EPOCHS = 100
-    LEARNING_RATE_G = 0.0002
-    LEARNING_RATE_D = 0.0002
-    BETA1 = 0.5
-    BETA2 = 0.999
-
-    # Loss weights
-    LAMBDA_RECON = 10.0
-    LAMBDA_IDENTITY = 5.0
-    LAMBDA_CONTENT = 2.0
-    LAMBDA_ADV = 1.0
-
-    # Training settings
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    NUM_WORKERS = 4
-    SAVE_INTERVAL = 5
-    LOG_INTERVAL = 10
-
-    # Data augmentation
-    USE_AUGMENTATION = True
-    PITCH_SHIFT_RANGE = (-2, 2)
-    TIME_STRETCH_RANGE = (0.9, 1.1)
-
-    # Vocoder
-    VOCODER_TYPE = "hifigan"  # or "melgan"
-    VOCODER_CHECKPOINT = "checkpoints/vocoder/hifigan.pth"
-
-    @classmethod
-    def to_dict(cls):
-        """Convertit la config en dictionnaire"""
-        return {k: v for k, v in cls.__dict__.items()
-                if not k.startswith('_') and not callable(v)}
-
-    @classmethod
-    def update(cls, config_dict):
-        """Met à jour la configuration depuis un dictionnaire"""
-        for key, value in config_dict.items():
-            if hasattr(cls, key):
-                setattr(cls, key, value)
-
-
+@dataclass
 class TrainingConfig:
-    """Configuration spécifique à l'entraînement"""
+    batch_size: int = 16
+    num_epochs: int = 200
+    learning_rate_g: float = 0.0002
+    learning_rate_d: float = 0.0001
+    beta1: float = 0.5
+    beta2: float = 0.999
+    grad_clip: float = 1.0
+    lambda_reconstruction: float = 10.0
+    lambda_adversarial: float = 1.0
+    lambda_identity: float = 5.0
+    lambda_content: float = 1.0
+    lambda_feature_matching: float = 10.0
+    discriminator_start_epoch: int = 5
+    save_every: int = 10
+    log_every: int = 100
+    eval_every: int = 1000
 
-    CHECKPOINT_DIR = "checkpoints"
-    LOG_DIR = "logs"
-    OUTPUT_DIR = "outputs"
-
-    # Early stopping
-    PATIENCE = 10
-    MIN_DELTA = 0.001
-
-    # Learning rate scheduler
-    USE_SCHEDULER = True
-    SCHEDULER_TYPE = "cosine"  # "step", "cosine", "plateau"
-    SCHEDULER_STEP_SIZE = 30
-    SCHEDULER_GAMMA = 0.5
-
-    # Gradient clipping
-    GRAD_CLIP_VALUE = 1.0
-
-    # Mixed precision training
-    USE_AMP = True
-
-    # Distributed training
-    DISTRIBUTED = False
-    WORLD_SIZE = 1
-
-
-class DataConfig:
-    """Configuration des données"""
-
-    # Dataset paths
-    DATASET_NAME = "VCTK"  # or "LibriTTS"
-    DATA_DIR = "data/raw"
-    PROCESSED_DIR = "data/processed"
-
-    # Train/Val/Test split
-    TRAIN_SPLIT = 0.8
-    VAL_SPLIT = 0.1
-    TEST_SPLIT = 0.1
-
-    # Audio processing
-    MIN_AUDIO_LENGTH = 1.0  # seconds
-    MAX_AUDIO_LENGTH = 10.0  # seconds
-    TRIM_SILENCE = True
-    NORMALIZE = True
-
-    # Spectrogram processing
-    SPEC_NORMALIZE = "instance"  # "instance", "batch", "none"
-
-    @classmethod
-    def get_speaker_pairs(cls):
-        """Retourne les paires de locuteurs pour l'entraînement"""
-        return [
-            ("p225", "p226"),  # Female to Female
-            ("p226", "p225"),  # Female to Female
-            ("p227", "p228"),  # Male to Male
-            ("p228", "p227"),  # Male to Male
-        ]
+class Config:
+    def __init__(self, config_path: Optional[str] = None):
+        if config_path is None:
+            config_path = Path(__file__).parent / "config.yaml"
+        
+        with open(config_path, 'r') as f:
+            config_dict = yaml.safe_load(f)
+        
+        self.audio = AudioConfig(**config_dict['audio'])
+        self.content_encoder = ContentEncoderConfig(**config_dict['model']['content_encoder'])
+        self.style_encoder = StyleEncoderConfig(**config_dict['model']['style_encoder'])
+        self.generator = GeneratorConfig(**config_dict['model']['generator'])
+        self.discriminator = DiscriminatorConfig(**config_dict['model']['discriminator'])
+        self.training = TrainingConfig(**config_dict['training'])
+        
+        self.data = config_dict['data']
+        self.logging = config_dict['logging']
+        self.evaluation = config_dict['evaluation']
+    
+    def __repr__(self):
+        return f"Config(audio={self.audio}, training={self.training})"

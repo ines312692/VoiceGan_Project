@@ -3,17 +3,18 @@ import torch.nn as nn
 import math
 from typing import List, Optional
 
+
 class ConvBlock(nn.Module):
     """Convolutional block with normalization and activation"""
 
     def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 3,
-        stride: int = 1,
-        padding: int = 1,
-        activation: str = "relu"
+            self,
+            in_channels: int,
+            out_channels: int,
+            kernel_size: int = 3,
+            stride: int = 1,
+            padding: int = 1,
+            activation: str = "relu"
     ):
         super().__init__()
         self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, stride, padding)
@@ -22,6 +23,7 @@ class ConvBlock(nn.Module):
 
     def forward(self, x):
         return self.activation(self.norm(self.conv(x)))
+
 
 class MultiHeadAttention(nn.Module):
     """Multi-head self-attention"""
@@ -65,15 +67,16 @@ class MultiHeadAttention(nn.Module):
 
         return self.out_linear(out)
 
+
 class TransformerBlock(nn.Module):
     """Transformer encoder block"""
 
     def __init__(
-        self,
-        d_model: int,
-        num_heads: int,
-        d_ff: int = 2048,
-        dropout: float = 0.1
+            self,
+            d_model: int,
+            num_heads: int,
+            d_ff: int = 2048,
+            dropout: float = 0.1
     ):
         super().__init__()
         self.attention = MultiHeadAttention(d_model, num_heads, dropout)
@@ -99,6 +102,7 @@ class TransformerBlock(nn.Module):
 
         return x
 
+
 class ContentEncoder(nn.Module):
     """
     Content Encoder: CNN + Transformer
@@ -106,15 +110,15 @@ class ContentEncoder(nn.Module):
     """
 
     def __init__(
-        self,
-        input_channels: int = 80,
-        channels: List[int] = [64, 128, 256, 512],
-        kernel_sizes: List[int] = [3, 3, 3, 3],
-        strides: List[int] = [1, 2, 2, 1],
-        transformer_dim: int = 512,
-        num_heads: int = 8,
-        num_layers: int = 4,
-        dropout: float = 0.1
+            self,
+            input_channels: int = 80,
+            channels: List[int] = [64, 128, 256, 512],
+            kernel_sizes: List[int] = [3, 3, 3, 3],
+            strides: List[int] = [1, 2, 2, 1],
+            transformer_dim: int = 512,
+            num_heads: int = 8,
+            num_layers: int = 4,
+            dropout: float = 0.1
     ):
         super().__init__()
 
@@ -176,6 +180,7 @@ class ContentEncoder(nn.Module):
         x = x.transpose(1, 2)
 
         return x
+
 
 class PositionalEncoding(nn.Module):
     """Positional encoding for transformer"""
