@@ -1,7 +1,6 @@
-"""
-Script de conversion simple pour VoiceGAN
-Convertit un fichier audio source avec le style d'un fichier audio cible
-"""
+#!/usr/bin/env python
+"""Voice conversion script"""
+
 import torch
 import argparse
 from pathlib import Path
@@ -9,127 +8,111 @@ import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from config.model_config import ModelConfig
+from config.model_config import Config
 from src.models.voicegan import VoiceGAN
 from src.preprocessing.audio_processor import AudioProcessor
-import soundfile as sf
+from src.preprocessing.mel_spectrogram import MelSpectrogramProcessor
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Convert voice A to B')
+    parser.add_argument('--source', type=str, required=True,
+                        help='Path to source audio file')
+    parser.add_argument('--target', type=str, required=True,
+                        help='Path to target reference audio file')
+    parser.add_argument('--output', type=str, required=True,
+                        help='Path to save converted audio')
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='Path to model checkpoint')
+    parser.add_argument('--config', type=str, default='config/config.yaml',
+                        help='Path to config file')
+    parser.add_argument('--device', type=str, default='cuda',
+                        help='Device to use')
+    return parser.parse_args()
 
-def convert_audio(source_path, target_path, output_path, checkpoint_path, config):
-    """
-    Convertit un audio source avec le style d'un audio cible
+def load_model(checkpoint_path: str, config: Config, device: str):
+    """Load trained model from checkpoint"""
+    model = VoiceGAN(
+        n_mels=config.audio.n_mels,
+        content_channels=config.content_encoder.channels,
+        content_kernel_sizes=config.content_encoder.kernel_sizes,
+        content_strides=config.content_encoder.strides,
+        transformer_dim=config.content_encoder.transformer_dim,
+        num_heads=config.content_encoder.num_heads,
+        num_transformer_layers=config.content_encoder.num_layers,
+        style_channels=config.style_encoder.channels,
+        style_kernel_sizes=config.style_encoder.kernel_sizes,
+        style_strides=config.style_encoder.strides,
+        style_dim=config.style_encoder.style_dim,
+        generator_channels=config.generator.channels,
+        generator_kernel_sizes=config.generator.kernel_sizes,
+        upsample_rates=config.generator.upsample_rates,
+        discriminator_channels=config.discriminator.channels,
+        discriminator_kernel_sizes=config.discriminator.kernel_sizes,
+        discriminator_strides=config.discriminator.strides
+    )
 
-    Args:
-        source_path: Chemin vers l'audio source (A)
-        target_path: Chemin vers l'audio cible (B)
-        output_path: Chemin de sortie pour l'audio converti
-        checkpoint_path: Chemin vers le checkpoint du modèle
-        config: Configuration du modèle
-    """
-    device = torch.device(config.DEVICE)
-
-    # Charger le modèle
-    print("Chargement du modèle...")
-    model = VoiceGAN(config).to(device)
-    model.load_checkpoint(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device)
     model.eval()
-    print("✓ Modèle chargé")
 
-    # Créer le processor
-    processor = AudioProcessor(config)
-
-    # Charger les audios
-    print(f"\nChargement de l'audio source: {source_path}")
-    source_audio, _ = processor.load_audio(source_path, normalize=True, trim_silence=True)
-    print(f"✓ Durée: {len(source_audio) / config.SAMPLE_RATE:.2f}s")
-
-    print(f"\nChargement de l'audio cible: {target_path}")
-    target_audio, _ = processor.load_audio(target_path, normalize=True, trim_silence=True)
-    print(f"✓ Durée: {len(target_audio) / config.SAMPLE_RATE:.2f}s")
-
-    # Générer les melspectrograms
-    print("\nGénération des melspectrograms...")
-    source_mel = processor.audio_to_mel(source_audio)
-    target_mel = processor.audio_to_mel(target_audio)
-
-    # Normaliser
-    source_mel = processor.normalize_mel(source_mel, method='instance')
-    target_mel = processor.normalize_mel(target_mel, method='instance')
-
-    print(f"✓ Source mel shape: {source_mel.shape}")
-    print(f"✓ Target mel shape: {target_mel.shape}")
-
-    # Convertir en tenseurs
-    source_mel_tensor = torch.from_numpy(source_mel).unsqueeze(0).float().to(device)
-    target_mel_tensor = torch.from_numpy(target_mel).unsqueeze(0).float().to(device)
-
-    # Conversion A→B
-    print("\nConversion en cours...")
-    with torch.no_grad():
-        converted_mel_tensor = model.convert_voice(source_mel_tensor, target_mel_tensor)
-
-    converted_mel = converted_mel_tensor.squeeze().cpu().numpy()
-    print(f"✓ Converted mel shape: {converted_mel.shape}")
-
-    # Dénormaliser
-    converted_mel = processor.denormalize_mel(converted_mel, method='instance')
-
-    # Générer l'audio final (Griffin-Lim)
-    print("\nGénération de l'audio final...")
-    converted_audio = processor.mel_to_audio(converted_mel, vocoder=None)
-
-    # Sauvegarder
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    sf.write(output_path, converted_audio, config.SAMPLE_RATE)
-    print(f"\n✅ Audio converti sauvegardé: {output_path}")
-    print(f"   Durée: {len(converted_audio) / config.SAMPLE_RATE:.2f}s")
-
+    return model
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Convertir un audio source avec le style d\'un audio cible'
+    args = parse_args()
+
+    # Load config
+    config = Config(args.config)
+
+    # Set device
+    device = args.device if torch.cuda.is_available() else 'cpu'
+    print(f"Using device: {device}")
+
+    # Load model
+    print("Loading model...")
+    model = load_model(args.checkpoint, config, device)
+
+    # Initialize processors
+    audio_processor = AudioProcessor(
+        sample_rate=config.audio.sample_rate,
+        segment_length=config.audio.segment_length
     )
-    parser.add_argument('--source', type=str, required=True,
-                        help='Chemin vers l\'audio source (A)')
-    parser.add_argument('--target', type=str, required=True,
-                        help='Chemin vers l\'audio cible (B)')
-    parser.add_argument('--output', type=str, required=True,
-                        help='Chemin de sortie pour l\'audio converti')
-    parser.add_argument('--checkpoint', type=str, default='checkpoints/best_model.pth',
-                        help='Chemin vers le checkpoint du modèle')
-    args = parser.parse_args()
 
-    # Configuration
-    config = ModelConfig()
+    mel_processor = MelSpectrogramProcessor(
+        sample_rate=config.audio.sample_rate,
+        n_fft=config.audio.n_fft,
+        hop_length=config.audio.hop_length,
+        win_length=config.audio.win_length,
+        n_mels=config.audio.n_mels,
+        fmin=config.audio.fmin,
+        fmax=config.audio.fmax
+    )
 
-    print("\n" + "=" * 60)
-    print("VoiceGAN-Transformation: Conversion A→B")
-    print("=" * 60)
-    print(f"Source: {args.source}")
-    print(f"Target: {args.target}")
-    print(f"Output: {args.output}")
-    print(f"Checkpoint: {args.checkpoint}")
-    print(f"Device: {config.DEVICE}")
-    print("=" * 60)
+    # Load source audio
+    print(f"Loading source audio: {args.source}")
+    source_audio = audio_processor.load_audio(args.source)
+    source_mel = mel_processor.wav_to_mel(source_audio).unsqueeze(0).to(device)
 
-    # Conversion
-    try:
-        convert_audio(
-            args.source,
-            args.target,
-            args.output,
-            args.checkpoint,
-            config
-        )
-        print("\n✅ Conversion terminée avec succès!")
+    # Load target reference audio
+    print(f"Loading target reference: {args.target}")
+    target_audio = audio_processor.load_audio(args.target)
+    target_mel = mel_processor.wav_to_mel(target_audio).unsqueeze(0).to(device)
 
-    except Exception as e:
-        print(f"\n❌ Erreur lors de la conversion: {e}")
-        import traceback
-        traceback.print_exc()
+    # Convert
+    print("Converting voice...")
+    with torch.no_grad():
+        converted_mel = model.convert(source_mel, target_mel)
 
+    # Convert mel back to audio
+    print("Converting to audio...")
+    converted_audio = mel_processor.mel_to_wav(converted_mel.squeeze(0).cpu())
 
-if __name__ == "__main__":
+    # Save output
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_processor.save_audio(converted_audio, output_path)
+
+    print(f"Converted audio saved to: {output_path}")
+
+if __name__ == '__main__':
     main()
