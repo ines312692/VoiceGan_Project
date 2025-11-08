@@ -1,0 +1,105 @@
+# VoiceGAN Configuration
+
+# Data paths
+data:
+  train_dir: "data/train"
+  val_dir: "data/val"
+  test_dir: "data/test"
+  sample_rate: 22050
+  num_speakers: 10
+
+# Audio preprocessing
+audio:
+  sample_rate: 22050
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  n_mels: 80
+  fmin: 0
+  fmax: 8000
+  segment_length: 16384  # ~0.74s at 22050Hz
+
+# Model architecture
+model:
+  # Content Encoder
+  content_encoder:
+    channels: [64, 128, 256, 512]
+    kernel_sizes: [3, 3, 3, 3]
+    strides: [1, 2, 2, 1]
+    transformer_dim: 512
+    num_heads: 8
+    num_layers: 4
+    dropout: 0.1
+
+  # Style Encoder
+  style_encoder:
+    channels: [64, 128, 256, 512]
+    kernel_sizes: [3, 3, 3, 3]
+    strides: [2, 2, 2, 2]
+    style_dim: 256
+
+  # Generator
+  generator:
+    input_dim: 768  # content_dim (512) + style_dim (256)
+    channels: [512, 256, 128, 64]
+    kernel_sizes: [3, 3, 3, 3]
+    upsample_rates: [2, 2, 2, 1]
+    output_channels: 80  # n_mels
+
+  # Discriminator
+  discriminator:
+    channels: [64, 128, 256, 512, 1024]
+    kernel_sizes: [4, 4, 4, 4, 4]
+    strides: [2, 2, 2, 2, 1]
+
+  # Vocoder (HiFi-GAN)
+  vocoder:
+    resblock: "1"
+    upsample_rates: [8, 8, 2, 2]
+    upsample_kernel_sizes: [16, 16, 4, 4]
+    upsample_initial_channel: 512
+    resblock_kernel_sizes: [3, 7, 11]
+    resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+
+# Training
+training:
+  batch_size: 16
+  num_epochs: 200
+  learning_rate_g: 0.0002
+  learning_rate_d: 0.0001
+  beta1: 0.5
+  beta2: 0.999
+  grad_clip: 1.0
+
+  # Loss weights
+  lambda_reconstruction: 10.0
+  lambda_adversarial: 1.0
+  lambda_identity: 5.0
+  lambda_content: 1.0
+  lambda_feature_matching: 10.0
+
+  # Training schedule
+  discriminator_start_epoch: 5
+  save_every: 10
+  log_every: 100
+  eval_every: 1000
+
+# Optimization
+optimization:
+  scheduler: "cosine"
+  warmup_epochs: 10
+  min_lr: 1e-6
+
+# Logging
+logging:
+  log_dir: "logs"
+  checkpoint_dir: "checkpoints"
+  sample_dir: "outputs/audio"
+  tensorboard: true
+  wandb: false
+  project_name: "voicegan-conversion"
+
+# Evaluation
+evaluation:
+  metrics: ["mcd", "cosine_similarity", "mos"]
+  num_samples: 100
